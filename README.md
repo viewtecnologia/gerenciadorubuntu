@@ -26,7 +26,7 @@ Sistema de gerenciamento para implantação automática de aplicações Replit e
 Para instalar o Gerenciador de Deploy Replit em seu servidor, execute o seguinte comando como root ou usuário com privilégios sudo:
 
 ```bash
-curl -sL https://raw.githubusercontent.com/viewtecnologia/replit-deploy-manager/main/install.sh | sudo bash
+curl -sL https://raw.githubusercontent.com/viewtecnologia/gerenciadorubuntu/main/install.sh | sudo bash
 ```
 
 Este comando fará o download do script de instalação e o executará automaticamente. Durante o processo, você será solicitado a fornecer algumas informações para configurar o usuário administrador inicial.

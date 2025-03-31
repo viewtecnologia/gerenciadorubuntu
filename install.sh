@@ -13,7 +13,7 @@ NC='\033[0m' # Sem cor
 
 # Versão do instalador
 VERSION="1.0.0"
-REPO_URL="https://github.com/viewtecnologia/replit-deploy-manager/archive/refs/heads/main.zip"
+REPO_URL="https://github.com/viewtecnologia/gerenciadorubuntu/archive/refs/heads/main.zip"
 
 # Diretórios de instalação
 INSTALL_DIR="/opt/replit-deploy"
@@ -111,15 +111,14 @@ setup_credentials() {
   
   # Confirmar informações
   echo ""
-  echo "Confirme as informações:"
+  echo "Configurando com as seguintes informações:"
   echo "- Usuário: $admin_username"
   echo "- E-mail: $admin_email"
-  read -p "As informações estão corretas? (s/n): " confirm
-  
-  if [[ "$confirm" != "s" && "$confirm" != "S" ]]; then
-    echo "Vamos tentar novamente."
-    setup_credentials
-  fi
+  echo "- Senha: $admin_password"
+  echo ""
+  echo "IMPORTANTE: Anote a senha mostrada acima, pois ela não será exibida novamente!"
+  echo ""
+  sleep 5  # Dar tempo para o usuário anotar a senha
 }
 
 # Instalar dependências do sistema
@@ -178,7 +177,7 @@ download_and_install_app() {
   cd /tmp
   wget ${REPO_URL} -O replit-deploy.zip
   unzip replit-deploy.zip
-  mv replit-deploy-manager-main ${APP_DIR}
+  mv gerenciadorubuntu-main ${APP_DIR}
   
   # Criar ambiente virtual Python
   python3 -m venv ${VENV_DIR}
@@ -213,6 +212,12 @@ EOF
 #!/bin/bash
 source ${VENV_DIR}/bin/activate
 cd ${APP_DIR}
+export FLASK_APP=main.py
+export PYTHONPATH=${APP_DIR}
+export DATABASE_URL=postgresql://replit_deploy:${DB_PASSWORD}@localhost/replit_deploy
+export SESSION_SECRET=\$(cat ${APP_DIR}/.env | grep SESSION_SECRET | cut -d= -f2)
+
+# Tentar iniciar o aplicativo em modo de produção
 exec gunicorn --config gunicorn_config.py main:app
 EOF
 
@@ -342,6 +347,10 @@ server {
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+        proxy_read_timeout 300;
+        send_timeout 300;
     }
 }
 EOF
@@ -369,8 +378,112 @@ setup_firewall() {
   ufw status | grep -q "Status: active" || ufw --force enable
 }
 
+# Verificar status da instalação
+check_installation_status() {
+  progress "Verificando status da instalação"
+  
+  # Verificar se o servico está rodando
+  systemctl status replit-deploy.service > /dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}AVISO: O serviço replit-deploy.service não está rodando corretamente.${NC}"
+    echo -e "Tentando reiniciar..."
+    systemctl restart replit-deploy.service
+    sleep 3
+  fi
+  
+  # Verificar se a aplicação está ouvindo na porta 5000
+  netstat -tuln | grep :5000 > /dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}AVISO: A aplicação não está escutando na porta 5000.${NC}"
+    echo -e "Verificando logs..."
+    tail -n 20 ${LOG_DIR}/manager-error.log
+    echo ""
+    echo -e "Tentando corrigir o problema..."
+    
+    # Reiniciar o serviço
+    systemctl restart replit-deploy.service
+    sleep 5
+    
+    # Verificar novamente
+    netstat -tuln | grep :5000 > /dev/null 2>&1
+    if [ $? -ne 0 ]; then
+      echo -e "${RED}Erro: A aplicação ainda não está funcionando.${NC}"
+      echo -e "Verifique os logs em ${LOG_DIR}/manager-error.log"
+    else
+      echo -e "${GREEN}A aplicação está agora funcionando corretamente.${NC}"
+    fi
+  else
+    echo -e "${GREEN}A aplicação está rodando e escutando na porta 5000.${NC}"
+  fi
+  
+  # Verificar configuração do Nginx
+  nginx -t > /dev/null 2>&1
+  if [ $? -ne 0 ]; then
+    echo -e "${YELLOW}AVISO: A configuração do Nginx tem erros.${NC}"
+    nginx -t
+    echo -e "Tentando corrigir..."
+    
+    # Recriar configuração do Nginx
+    setup_nginx
+  else
+    echo -e "${GREEN}A configuração do Nginx está correta.${NC}"
+  fi
+  
+  # Verificar se os arquivos da aplicação existem
+  if [ ! -f "${APP_DIR}/main.py" ]; then
+    echo -e "${RED}ERRO: O arquivo main.py não existe no diretório de instalação!${NC}"
+    echo "Arquivos encontrados em ${APP_DIR}:"
+    ls -la ${APP_DIR}
+    
+    echo -e "${YELLOW}Tentando reparar problemas com arquivos da aplicação...${NC}"
+    
+    # Tente baixar novamente o código-fonte
+    cd /tmp
+    rm -rf gerenciadorubuntu-main replit-deploy.zip
+    wget ${REPO_URL} -O replit-deploy.zip
+    unzip replit-deploy.zip
+    if [ -d "gerenciadorubuntu-main" ]; then
+      echo -e "${GREEN}Código-fonte baixado com sucesso. Copiando arquivos...${NC}"
+      cp -r gerenciadorubuntu-main/* ${APP_DIR}/
+      
+      # Verificar novamente
+      if [ -f "${APP_DIR}/main.py" ]; then
+        echo -e "${GREEN}Arquivo main.py encontrado após reparo!${NC}"
+        # Reiniciar serviço
+        systemctl restart replit-deploy.service
+        sleep 5
+      else
+        # Tentar criar um arquivo main.py simples para testar
+        echo -e "${YELLOW}Arquivo main.py ainda não existe. Criando arquivo mínimo para teste...${NC}"
+        cat > ${APP_DIR}/main.py << EOF
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return 'Gerenciador de Deploy Replit - Instalação em progresso. Por favor, verifique os logs.'
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)
+EOF
+        # Reiniciar serviço
+        systemctl restart replit-deploy.service
+        sleep 5
+      fi
+    else
+      echo -e "${RED}Falha ao baixar o código-fonte novamente.${NC}"
+    fi
+  else
+    echo -e "${GREEN}Arquivos da aplicação encontrados corretamente.${NC}"
+  fi
+}
+
 # Finalizar instalação
 finalize_installation() {
+  # Verificar status da instalação
+  check_installation_status
+  
   # Obter endereço IP do servidor
   SERVER_IP=$(hostname -I | awk '{print $1}')
   
